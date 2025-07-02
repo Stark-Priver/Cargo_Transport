@@ -6,6 +6,8 @@ import json
 from datetime import datetime, timedelta
 import logging
 from werkzeug.exceptions import BadRequest
+import mysql.connector
+from mysql.connector import Error as MySQLError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -16,34 +18,106 @@ app = Flask(__name__)
 # Configuration
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
-    DATABASE_FILE = 'transport_orders.json'
     MAX_QUANTITY = 1000  # Maximum bags allowed
     MIN_QUANTITY = 1     # Minimum bags required
+
+    # MySQL Configuration - Read from environment variables
+    MYSQL_HOST = os.environ.get('MYSQL_HOST', 'localhost')
+    MYSQL_USER = os.environ.get('MYSQL_USER', 'root')
+    MYSQL_PASSWORD = os.environ.get('MYSQL_PASSWORD', '')
+    MYSQL_DB = os.environ.get('MYSQL_DB', 'transport_db')
+    MYSQL_PORT = os.environ.get('MYSQL_PORT', 3306)
+    # DATABASE_FILE = 'transport_orders.json' # Removed
+
 
 # Initialize app config
 app.config.from_object(Config)
 
-# Data storage functions (JSON-based for cPanel compatibility)
-def load_orders():
-    """Load orders from JSON file"""
-    try:
-        if os.path.exists(Config.DATABASE_FILE):
-            with open(Config.DATABASE_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {}
-    except Exception as e:
-        logger.error(f"Error loading orders: {e}")
-        return {}
+# Database connection pool
+db_pool = None
 
-def save_orders(orders):
-    """Save orders to JSON file"""
+def create_tables_if_not_exist():
+    """Creates database tables if they don't already exist."""
+    conn = None
+    cursor = None
     try:
-        with open(Config.DATABASE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(orders, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        logger.error(f"Error saving orders: {e}")
-        return False
+        conn = get_db_connection()
+        if conn is None:
+            logger.error("Failed to get DB connection for table creation.")
+            return
+
+        cursor = conn.cursor()
+
+        # Define the orders table schema
+        orders_table_sql = """
+        CREATE TABLE IF NOT EXISTS orders (
+            track_number VARCHAR(20) PRIMARY KEY,
+            phone_number VARCHAR(20),
+            crop VARCHAR(100),
+            quantity INT,
+            pickup_location VARCHAR(255),
+            destination_location VARCHAR(255),
+            transporter_name VARCHAR(255),
+            transporter_phone VARCHAR(20),
+            transporter_rating VARCHAR(10),
+            status VARCHAR(255),
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            status_updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+        cursor.execute(orders_table_sql)
+        conn.commit()
+        logger.info("`orders` table checked/created successfully.")
+
+    except MySQLError as e:
+        logger.error(f"Error during table creation: {e}")
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+            logger.debug("MySQL connection closed after table creation check.")
+
+
+def init_db_pool():
+    """Initialize MySQL connection pool."""
+    global db_pool
+    try:
+        db_pool = mysql.connector.pooling.MySQLConnectionPool(
+            pool_name="transport_pool",
+            pool_size=5,
+            host=app.config['MYSQL_HOST'],
+            user=app.config['MYSQL_USER'],
+            password=app.config['MYSQL_PASSWORD'],
+            database=app.config['MYSQL_DB'],
+            port=app.config['MYSQL_PORT']
+        )
+        logger.info("MySQL connection pool initialized successfully.")
+    except MySQLError as e:
+        logger.error(f"Error while connecting to MySQL using connection pool: {e}")
+        db_pool = None # Ensure pool is None if initialization fails
+
+def get_db_connection():
+    """Get a connection from the pool."""
+    if not db_pool:
+        logger.error("Connection pool is not initialized. Call init_db_pool() first.")
+        # Attempt to re-initialize, could be a transient issue or first call
+        init_db_pool()
+        if not db_pool: # If still not initialized, raise error
+             raise MySQLError("Failed to initialize database connection pool.")
+    try:
+        conn = db_pool.get_connection()
+        if conn.is_connected():
+            logger.debug("MySQL connection acquired from pool.")
+            return conn
+        else:
+            logger.error("Failed to get a valid connection from pool.")
+            return None
+    except MySQLError as e:
+        logger.error(f"Error getting connection from pool: {e}")
+        return None
+
+# JSON-based functions load_orders and save_orders are now removed.
 
 def generate_track_number():
     """Generate a unique tracking number"""
@@ -84,20 +158,101 @@ def is_valid_quantity(quantity_str):
         return False
 
 def save_order(track_number, order_data):
-    """Save order to database"""
-    orders = load_orders()
-    orders[track_number] = {
-        **order_data,
-        'created_at': datetime.now().isoformat(),
-        'status': 'Ombi limepokelewa na Msafirishaji atawasiliana na wewe hivi karibuni',
-        'status_updated_at': datetime.now().isoformat()
-    }
-    return save_orders(orders)
+    """Save order to MySQL database"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            logger.error("Failed to get DB connection for saving order.")
+            return False
+        cursor = conn.cursor()
+
+        sql = """
+        INSERT INTO orders (
+            track_number, phone_number, crop, quantity, pickup_location,
+            destination_location, transporter_name, transporter_phone,
+            transporter_rating, status, created_at, status_updated_at
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+
+        current_time = datetime.now()
+        # Ensure all expected fields are present in order_data and provide defaults if necessary
+        data_tuple = (
+            track_number,
+            order_data.get('phone_number'),
+            order_data.get('crop'),
+            order_data.get('quantity'),
+            order_data.get('pickup_location'),
+            order_data.get('destination_location'),
+            order_data.get('transporter', {}).get('name'),
+            order_data.get('transporter', {}).get('phone'),
+            order_data.get('transporter', {}).get('rating'),
+            'Ombi limepokelewa na Msafirishaji atawasiliana na wewe hivi karibuni', # Initial status
+            current_time, # created_at
+            current_time  # status_updated_at
+        )
+
+        cursor.execute(sql, data_tuple)
+        conn.commit()
+        logger.info(f"Order {track_number} saved successfully to MySQL.")
+        return True
+    except MySQLError as e:
+        logger.error(f"Error saving order {track_number} to MySQL: {e}")
+        if conn:
+            conn.rollback() # Rollback in case of error
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+            logger.debug("MySQL connection closed after saving order.")
 
 def get_order_status(track_number):
-    """Get order status from database"""
-    orders = load_orders()
-    return orders.get(track_number)
+    """Get order status from MySQL database"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            logger.error(f"Failed to get DB connection for fetching order {track_number}.")
+            return None
+
+        # Use a dictionary cursor to easily map column names to values
+        cursor = conn.cursor(dictionary=True)
+
+        sql = "SELECT * FROM orders WHERE track_number = %s"
+        cursor.execute(sql, (track_number,))
+        order_data = cursor.fetchone()
+
+        if order_data:
+            logger.info(f"Order {track_number} fetched successfully from MySQL.")
+            # Structure transporter details as expected by the USSD logic
+            order_data['transporter'] = {
+                'name': order_data.get('transporter_name'),
+                'phone': order_data.get('transporter_phone'),
+                'rating': order_data.get('transporter_rating')
+            }
+            # Convert datetime objects to string if necessary for JSON serialization later,
+            # though USSD directly uses them. For API consistency, this is good.
+            if isinstance(order_data.get('created_at'), datetime):
+                order_data['created_at'] = order_data['created_at'].isoformat()
+            if isinstance(order_data.get('status_updated_at'), datetime):
+                order_data['status_updated_at'] = order_data['status_updated_at'].isoformat()
+            return order_data
+        else:
+            logger.info(f"Order {track_number} not found in MySQL.")
+            return None
+    except MySQLError as e:
+        logger.error(f"Error fetching order {track_number} from MySQL: {e}")
+        return None
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+            logger.debug(f"MySQL connection closed after fetching order {track_number}.")
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -305,20 +460,21 @@ def ussd_callback():
                         "Ombi limepokewa na linatarajiwa kuanza safari",
                         "Msafiri amepokea ombi na ameshaanza safari",
                         "Mizigo iko njiani - eneo la Makambako",
-                        "Mizigo iko karibu na mahali pa utoaji",
-                        "Mizigo imefika mahali pa utoaji"
-                    ]
-                    current_status = random.choice(statuses)
+                        # "Mizigo iko karibu na mahali pa utoaji", # Example statuses removed
+                        # "Mizigo imefika mahali pa utoaji" # Actual status comes from DB
+                    # ]
+                    # current_status = random.choice(statuses) # Using actual status from DB
+                    db_status = order.get('status', 'Hali haijulikani') # Get status from DB
                     
                     response = f"END HALI YA OMBI: {track_input}\n\n"
-                    response += f"Zao: {order['crop']}\n"
-                    response += f"Kiasi: {order['quantity']} Magunia\n"
+                    response += f"Zao: {order.get('crop', 'N/A')}\n"
+                    response += f"Kiasi: {order.get('quantity', 'N/A')} Magunia\n"
                     response += f"Kutoka: {order.get('pickup_location', 'N/A')}\n"
-                    response += f"Kwenda: {order.get('destination_location', order.get('location', 'N/A'))}\n"
-                    response += f"Hali: {current_status}\n\n"
+                    response += f"Kwenda: {order.get('destination_location', 'N/A')}\n" # Corrected field
+                    response += f"Hali: {db_status}\n\n" # Use status from DB
                     response += "MAELEZO YA MSAFIRISHAJI:\n"
-                    response += f"Msafirishaji: {order['transporter']['name']}\n"
-                    response += f"Mawasiliano: {order['transporter']['phone']}\n\n"
+                    response += f"Msafirishaji: {order.get('transporter', {}).get('name', 'N/A')}\n"
+                    response += f"Mawasiliano: {order.get('transporter', {}).get('phone', 'N/A')}\n\n"
                     response += "Kwa maelezo zaidi wasiliana na Msafirishaji."
                 else:
                     response = "END NAMBA HAIJAPATIKANA\n\n"
@@ -367,6 +523,123 @@ def ussd_callback():
         logger.error(f"Error processing USSD request: {e}")
         return "END Samahani, kuna tatizo la kimfumo. Tafadhali jaribu baadae."
 
+# Admin Web Dashboard APIs
+@app.route('/api/orders', methods=['GET'])
+def get_all_orders():
+    """API endpoint to fetch all orders for the admin dashboard."""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            return jsonify({'error': 'Database connection failed'}), 500
+
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM orders ORDER BY created_at DESC")
+        orders = cursor.fetchall()
+
+        # Convert datetime objects to ISO format strings for JSON serialization
+        for order in orders:
+            if isinstance(order.get('created_at'), datetime):
+                order['created_at'] = order['created_at'].isoformat()
+            if isinstance(order.get('status_updated_at'), datetime):
+                order['status_updated_at'] = order['status_updated_at'].isoformat()
+            # Add transporter sub-dictionary for consistency if needed by frontend
+            order['transporter'] = {
+                'name': order.get('transporter_name'),
+                'phone': order.get('transporter_phone'),
+                'rating': order.get('transporter_rating')
+            }
+
+
+        return jsonify(orders), 200
+    except MySQLError as e:
+        logger.error(f"Error fetching all orders for admin: {e}")
+        return jsonify({'error': 'Failed to fetch orders', 'details': str(e)}), 500
+    except Exception as e:
+        logger.error(f"Unexpected error fetching all orders: {e}")
+        return jsonify({'error': 'An unexpected error occurred', 'details': str(e)}), 500
+    finally:
+        if cursor:
+            cursor.close()
+        if conn and conn.is_connected():
+            conn.close()
+
+@app.route('/api/orders/<string:track_number>/status', methods=['PUT'])
+def update_order_status_api(track_number):
+    """API endpoint to update the status of an order."""
+    try:
+        data = request.get_json()
+        new_status = data.get('status')
+
+        if not new_status:
+            return jsonify({'error': 'New status is required'}), 400
+
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            if conn is None:
+                return jsonify({'error': 'Database connection failed'}), 500
+
+            cursor = conn.cursor()
+
+            # Check if order exists
+            cursor.execute("SELECT track_number FROM orders WHERE track_number = %s", (track_number,))
+            order_exists = cursor.fetchone()
+            if not order_exists:
+                return jsonify({'error': 'Order not found'}), 404
+
+            # Update status and status_updated_at
+            sql = "UPDATE orders SET status = %s, status_updated_at = %s WHERE track_number = %s"
+            current_time = datetime.now()
+            cursor.execute(sql, (new_status, current_time, track_number))
+            conn.commit()
+
+            if cursor.rowcount > 0:
+                logger.info(f"Status for order {track_number} updated to '{new_status}' via API.")
+                # Fetch the updated order to return
+                cursor.execute("SELECT * FROM orders WHERE track_number = %s", (track_number,))
+                updated_order = cursor.fetchone() # Using non-dictionary cursor here, need to map
+
+                # Get column names to create a dict
+                column_names = [desc[0] for desc in cursor.description]
+                updated_order_dict = dict(zip(column_names, updated_order))
+
+                if isinstance(updated_order_dict.get('created_at'), datetime):
+                    updated_order_dict['created_at'] = updated_order_dict['created_at'].isoformat()
+                if isinstance(updated_order_dict.get('status_updated_at'), datetime):
+                    updated_order_dict['status_updated_at'] = updated_order_dict['status_updated_at'].isoformat()
+
+                updated_order_dict['transporter'] = {
+                    'name': updated_order_dict.get('transporter_name'),
+                    'phone': updated_order_dict.get('transporter_phone'),
+                    'rating': updated_order_dict.get('transporter_rating')
+                }
+                return jsonify(updated_order_dict), 200
+            else:
+                # This case should ideally not be reached if existence check passed
+                return jsonify({'error': 'Order not found or status not changed'}), 404
+
+        except MySQLError as e:
+            logger.error(f"Database error updating status for order {track_number}: {e}")
+            if conn:
+                conn.rollback()
+            return jsonify({'error': 'Database error updating status', 'details': str(e)}), 500
+        except Exception as e:
+            logger.error(f"Unexpected error updating status for order {track_number}: {e}")
+            if conn:
+                conn.rollback()
+            return jsonify({'error': 'An unexpected error occurred', 'details': str(e)}), 500
+        finally:
+            if cursor:
+                cursor.close()
+            if conn and conn.is_connected():
+                conn.close()
+    except BadRequest:
+        return jsonify({'error': 'Invalid JSON data'}), 400
+
+
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({'error': 'Endpoint not found'}), 404
@@ -376,10 +649,16 @@ def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    # Create orders file if it doesn't exist
-    if not os.path.exists(Config.DATABASE_FILE):
-        save_orders({})
+    # Initialize the database connection pool
+    init_db_pool()
     
+    # Create tables if they don't exist
+    # This should be called after pool initialization, as create_tables_if_not_exist uses get_db_connection
+    if db_pool: # Only attempt table creation if pool was initialized
+        create_tables_if_not_exist()
+    else:
+        logger.error("Database pool not initialized. Skipping table creation. Application might not work correctly.")
+
     # For cPanel hosting, use the environment port or default to 5000
     port = int(os.environ.get('PORT', 5000))
     
