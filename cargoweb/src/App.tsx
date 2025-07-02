@@ -12,6 +12,7 @@ const OrderDetails = lazy(() => import('./pages/orders/OrderDetails'));
 const TransportersList = lazy(() => import('./pages/transporters/TransportersList'));
 // const TransporterDetails = lazy(() => import('./pages/transporters/TransporterDetails'));
 const CreateTransporter = lazy(() => import('./pages/transporters/CreateTransporter'));
+const ReportsPage = lazy(() => import('./pages/reports/ReportsPage')); // Added ReportsPage
 // const Profile = lazy(() => import('./pages/profile/Profile'));
 // const NotFound = lazy(() => import('./pages/common/NotFound'));
 
@@ -47,6 +48,7 @@ function App() {
           <Route path="orders/:id" element={<OrderDetails />} />
           <Route path="transporters" element={<TransportersList />} />
           <Route path="transporters/create" element={<CreateTransporter />} />
+          <Route path="reports" element={<ReportsPage />} /> {/* Added ReportsPage Route */}
           {/* <Route path="transporters/:id" element={<TransporterDetails />} />
           <Route path="profile" element={<Profile />} />
           <Route path="*" element={<NotFound />} /> */}
