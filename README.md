@@ -1,16 +1,19 @@
 # USSD-based Crop Transport Service with Admin Dashboard
 
-This project provides a USSD (Unstructured Supplementary Service Data) interface for users to request transportation services for their crops. It also includes a backend API for an admin web dashboard to manage and track these transport orders. The application is built with Flask (Python) and uses a MySQL database for data storage.
+This project provides a USSD (Unstructured Supplementary Service Data) interface for users to request transportation services for their crops. It also includes a backend API and a React/TypeScript frontend for an admin web dashboard to manage and track these transport orders. The backend is built with Flask (Python) and uses a MySQL database for data storage.
 
 ## Features
 
 *   **USSD Interface:**
-    *   Request crop transportation by specifying crop type, quantity, pickup location, and destination.
+    *   Request crop transportation by specifying crop type, quantity, pickup location, and destination (dynamically fetched from database).
     *   Track the status of an existing transport order using a tracking number.
     *   View contact information for the service.
 *   **Backend API for Admin Dashboard:**
-    *   `GET /api/orders`: Retrieve all transport orders.
-    *   `PUT /api/orders/<track_number>/status`: Update the status of a specific order.
+    *   Comprehensive CRUD APIs for Orders, Transporters, Locations, Crops, and System Settings.
+    *   Reporting APIs for order summaries and orders over time.
+*   **Admin Web Dashboard (`cargoweb/`):**
+    *   (Currently includes) UI for displaying reports (Orders Summary, Orders Over Time).
+    *   (Future scope) Full UI for managing all entities and system configurations.
 *   **Database:**
     *   Uses MySQL to store order information.
     *   Automatically creates necessary tables (`orders`, `transporters`, `locations`, `crops`, `system_settings`) on application startup if they don't exist.
@@ -69,81 +72,161 @@ The application uses the following tables:
 ```
 .
 ├── app.py            # Main Flask application with USSD logic and Admin APIs
-├── cargoweb/         # Placeholder for the Admin Web Dashboard frontend (React/TS)
+├── cargoweb/         # React/TypeScript frontend for the Admin Web Dashboard
 ├── README.md         # This file
-└── requirements.txt  # (Will be generated if not present) Python dependencies
+└── requirements.txt  # Python backend dependencies (generate if not present)
 ```
 
 ## Prerequisites
 
+### Backend (Python Flask USSD Service & API)
 *   Python 3.8+
 *   Flask
 *   mysql-connector-python
+*   python-dotenv (recommended for .env file management)
 *   A running MySQL Server instance
+
+### Frontend (Admin Dashboard - `cargoweb/`)
+*   Node.js (e.g., v18.x or later)
+*   npm (usually comes with Node.js) or yarn
+
 ## Setup and Installation
 
-1.  **Clone the Repository:**
+This project consists of a Python Flask backend and a React (TypeScript) frontend located in the `cargoweb/` directory.
+
+### 1. Clone the Repository
     ```bash
     git clone <repository_url>
     cd <repository_directory>
     ```
 
-2.  **Create a Virtual Environment (recommended):**
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
-    ```
+### 2. Backend Setup (Python Flask USSD Service & API)
 
-3.  **Install Dependencies:**
-    It's good practice to have a `requirements.txt` file. If one doesn't exist, you can create it after installing packages manually:
-    ```bash
-    pip install Flask mysql-connector-python
-    # pip freeze > requirements.txt # To generate requirements.txt
-    ```
-    If a `requirements.txt` is provided:
-    ```bash
-    pip install -r requirements.txt
-    ```
+   a.  **Navigate to Project Root:**
+       Ensure you are in the main project directory (e.g., `ussd-crop-transport-service/`).
 
-4.  **Configure Environment Variables:**
-    The application uses environment variables for configuration. Create a `.env` file in the project root or set these variables in your environment:
+   b.  **Create a Python Virtual Environment (recommended):**
+        ```bash
+        python3 -m venv venv
+        source venv/bin/activate  # On Windows: venv\Scripts\activate
+        ```
 
+   c.  **Install Backend Dependencies:**
+        A `requirements.txt` should ideally be present for the backend.
+        ```bash
+        pip install Flask mysql-connector-python python-dotenv
+        # Create/update requirements.txt after installing all necessary packages:
+        # pip freeze > requirements.txt
+        ```
+        If a `requirements.txt` is provided:
+        ```bash
+        pip install -r requirements.txt
+        ```
+
+### 3. Frontend Setup (Admin Dashboard - `cargoweb/`)
+
+   a.  **Navigate to Frontend Directory:**
+        ```bash
+        cd cargoweb
+        ```
+
+   b.  **Install Frontend Dependencies:**
+        Using npm:
+        ```bash
+        npm install
+        ```
+        Or using yarn:
+        ```bash
+        yarn install
+        ```
+
+## Configure Environment Variables
+
+### Backend (Python Flask - in project root)
+
+The backend uses environment variables for critical configurations. It's recommended to use a `.env` file in the project root directory. If you installed `python-dotenv`, this file will be loaded automatically when running `flask run` or `python app.py`.
+
+Create a `.env` file in the project root with the following content:
     ```env
     # Flask Configuration
-    SECRET_KEY='your_very_secret_flask_key_here' # Change this!
-    FLASK_ENV='development' # or 'production'
-    # FLASK_APP='app.py' # Usually not needed if named app.py or wsgi.py
+    SECRET_KEY='your_very_secret_flask_key_here_CHANGE_ME' # Important: Change for production!
+    FLASK_ENV='development'  # Set to 'production' for deployment
+    # FLASK_APP='app.py' # Usually not needed if your main file is app.py
 
     # MySQL Database Configuration
-    MYSQL_HOST='localhost'        # Your MySQL host
-    MYSQL_USER='your_mysql_user'  # Your MySQL username
-    MYSQL_PASSWORD='your_mysql_password' # Your MySQL password
-    MYSQL_DB='transport_db'       # The database name to use/create
-    MYSQL_PORT='3306'             # Your MySQL port (default is 3306)
+    MYSQL_HOST='localhost'
+    MYSQL_USER='your_mysql_user'
+    MYSQL_PASSWORD='your_mysql_password'
+    MYSQL_DB='transport_db'
+    MYSQL_PORT='3306'
     ```
-    **Note:** Ensure the MySQL database (`transport_db` or your chosen name) exists on your MySQL server. The application will create the `orders` table within this database if it doesn't exist.
+    **Note on Database:** Ensure the MySQL database (e.g., `transport_db`) specified in `MYSQL_DB` exists on your MySQL server. The application will attempt to create the necessary tables within this database if they don't already exist.
 
-5.  **Database Setup:**
-    *   Ensure your MySQL server is running.
-    *   Create the database specified in `MYSQL_DB` if it doesn't already exist.
-        ```sql
-        CREATE DATABASE IF NOT EXISTS transport_db; -- Or your chosen DB name
-        ```
-    *   The `orders` table will be created automatically by the application on its first run if it's not found in the database.
+### Frontend (Admin Dashboard - `cargoweb/`)
 
-6.  **Run the Flask Application:**
+The frontend currently has the API base URL hardcoded in `cargoweb/src/store/reportStore.ts` as `http://localhost:5000/api`.
+
+**Recommendation for Production/Flexibility:**
+For better flexibility, especially when deploying, this API URL should be configured using environment variables for the frontend. Vite (used in this React setup) supports environment variables through `.env` files in the `cargoweb/` directory.
+
+1.  Create a `.env` file (e.g., `.env.local` or `.env`) in the `cargoweb/` directory.
+2.  Add your API URL, prefixed with `VITE_` (as required by Vite):
+    ```env
+    VITE_API_BASE_URL=http://localhost:5000/api
+    ```
+3.  Modify the frontend code (e.g., in `reportStore.ts` and any other places API calls are made) to use this environment variable:
+    ```typescript
+    const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api';
+    ```
+This change makes the frontend API endpoint configurable without code changes for different environments.
+
+## Running the Full Project
+
+To run the complete application, you need to start both the backend Flask server and the frontend React development server.
+
+### 1. Start the Backend (Python Flask API)
+
+*   Ensure your Python virtual environment (e.g., `venv`) is activated.
+*   Make sure your `.env` file is configured correctly in the project root, especially the database connection details.
+*   Ensure your MySQL server is running.
+*   From the **project root directory**, run:
     ```bash
     flask run
     ```
-    Or directly:
+    Or, if you prefer to specify the host and port (especially if running in a VM or container for testing):
     ```bash
     python app.py
+    # app.py is configured to run on host="0.0.0.0" and port from os.environ.get('PORT', 5000)
     ```
-    The application will typically run on `http://127.0.0.1:5000/`.
+*   The backend API should now be running, typically on `http://localhost:5000`. You should see log output in your terminal.
+
+### 2. Start the Frontend (React Admin Dashboard)
+
+*   Open a **new terminal window or tab**.
+*   Navigate to the frontend directory:
+    ```bash
+    cd cargoweb
+    ```
+*   If you haven't already, install dependencies:
+    ```bash
+    npm install
+    # or yarn install
+    ```
+*   Start the frontend development server:
+    ```bash
+    npm run dev
+    # or yarn dev
+    ```
+*   The frontend application will typically start on a different port (Vite's default is often `http://localhost:5173`, but check your terminal output).
+*   Open the frontend URL provided in your terminal (e.g., `http://localhost:5173`) in your web browser to access the admin dashboard.
+
+**Important:**
+*   The frontend (e.g., in `reportStore.ts`) is configured to make API calls to the backend, by default at `http://localhost:5000/api`. Ensure this matches where your backend is actually running. If you configured `VITE_API_BASE_URL` in `cargoweb/.env`, ensure it's correct.
+*   You need both servers running simultaneously to use the admin dashboard features that interact with the API.
 
 ## USSD Workflow
 
-The USSD service is accessible via a callback URL, typically `http://your_domain_or_ip/`, which would be configured with a USSD provider like Africa's Talking.
+The USSD service is accessible via a callback URL, typically `http://your_domain_or_ip/`, which would be configured with a USSD provider like Africa's Talking. The menus for selecting crops and locations are now dynamically populated from the database.
 
 1.  **Main Menu:** User dials the USSD code.
     *   `CON Karibu Huduma ya Usafirishaji wa Mazao`
@@ -153,16 +236,16 @@ The USSD service is accessible via a callback URL, typically `http://your_domain
         *   `0. Toka` (Exit)
 
 2.  **Omba Usafiri (Request Transport):**
-    *   User selects crop type.
+    *   User selects crop type (from DB list).
     *   User enters quantity (in bags).
-    *   User selects pickup location from a predefined list.
-    *   User selects destination location from a predefined list.
-    *   Order is confirmed, a tracking number is generated, and transporter details are provided.
+    *   User selects pickup location (from DB list).
+    *   User selects destination location (from DB list).
+    *   Order is confirmed, a tracking number is generated, and transporter details (randomly assigned from DB) are provided.
     *   `END UTHIBITISHO - OMBI LIMEPOKELEWA!...`
 
 3.  **Fuatilia Ombi (Track Order):**
     *   User enters their tracking number.
-    *   Order status and details are displayed.
+    *   Order status and details are displayed (fetched with joins).
     *   `END HALI YA OMBI: TRK...`
 
 4.  **Mawasiliano (Contact Info):**
@@ -250,31 +333,26 @@ These endpoints are intended to be used by the `cargoweb/` admin dashboard front
 
 ## Deployment (Example for cPanel)
 
-The `app.py` is written to be generally compatible with environments like cPanel that use Passenger or similar WSGI servers.
+The `app.py` is written to be generally compatible with environments like cPanel that use Passenger or similar WSGI servers. Further details would depend on specific hosting provider configurations for both Python backend and Node.js frontend.
 
-1.  Upload your project files to your hosting account.
-2.  Create a Python application through the cPanel interface.
-    *   Set the Application Startup File to `passenger_wsgi.py` (or as required by your host).
-    *   Set the Application Entry point to `app` (if `passenger_wsgi.py` imports `app` from `app.py`).
-    *   Example `passenger_wsgi.py`:
-        ```python
-        import os
-        import sys
-
-        # Add the project directory to Python's path
-        sys.path.insert(0, os.path.dirname(__file__))
-
-        # Import the Flask app instance
-        from app import app as application
-        ```
-3.  Install dependencies into the virtual environment created by cPanel for your application.
-4.  Set up environment variables through the cPanel interface (for database credentials, `SECRET_KEY`, etc.).
-5.  Ensure your MySQL database is set up and accessible with the provided credentials.
+1.  **Backend Deployment:**
+    *   Upload your Python project files (excluding `venv`).
+    *   Create a Python application through the cPanel interface.
+    *   Set the Application Startup File (e.g., `passenger_wsgi.py`).
+    *   Install dependencies into the virtual environment created by cPanel.
+    *   Set up environment variables for database credentials, `SECRET_KEY`, `FLASK_ENV='production'`.
+2.  **Frontend Deployment:**
+    *   Build the React application: `cd cargoweb && npm run build`.
+    *   Upload the contents of the `cargoweb/dist` directory to your web server (e.g., into `public_html` or a subdirectory).
+    *   Ensure your web server (e.g., Apache, Nginx) is configured to serve the `index.html` from this directory and handle client-side routing correctly (often requires rewrite rules for single-page applications).
+    *   Configure the production API URL for the frontend if it's different from development.
 
 ## Future Enhancements
 
-*   User authentication for admin APIs.
-*   More detailed status options and history.
+*   User authentication for admin APIs and frontend dashboard.
+*   More detailed status options and history for orders.
 *   Integration with a payment gateway.
 *   SMS notifications for order updates.
-*   Full implementation of the `cargoweb/` admin frontend.
+*   Full UI implementation for managing all entities (Transporters, Locations, Crops, Settings) in `cargoweb/`.
+*   Advanced reporting features (filtering, charting, export to CSV/Excel).
+```
