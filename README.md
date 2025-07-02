@@ -13,7 +13,56 @@ This project provides a USSD (Unstructured Supplementary Service Data) interface
     *   `PUT /api/orders/<track_number>/status`: Update the status of a specific order.
 *   **Database:**
     *   Uses MySQL to store order information.
-    *   Automatically creates the necessary `orders` table on application startup if it doesn't exist.
+    *   Automatically creates necessary tables (`orders`, `transporters`, `locations`, `crops`, `system_settings`) on application startup if they don't exist.
+    *   Manages relationships between orders, crops, locations, and transporters using foreign keys.
+
+## Database Schema Details
+
+The application uses the following tables:
+
+*   **`orders`**: Stores details of each transport order.
+    *   `track_number` (VARCHAR, PK): Unique tracking number.
+    *   `phone_number` (VARCHAR): Customer's phone number.
+    *   `crop_id` (INT, FK to `crops`): ID of the crop being transported.
+    *   `quantity` (INT): Number of bags/units.
+    *   `pickup_location_id` (INT, FK to `locations`): ID of the pickup location.
+    *   `destination_location_id` (INT, FK to `locations`): ID of the destination location.
+    *   `transporter_id` (INT, FK to `transporters`): ID of the assigned transporter.
+    *   `status` (VARCHAR): Current status of the order (e.g., "Ombi limepokelewa", "Mizigo iko njiani").
+    *   `created_at` (DATETIME): Timestamp of order creation.
+    *   `status_updated_at` (DATETIME): Timestamp of last status update.
+    *   (Older denormalized fields like `crop`, `pickup_location`, `transporter_name` are temporarily kept for backward compatibility during transition).
+
+*   **`transporters`**: Manages transporter information.
+    *   `id` (INT, PK, Auto-Increment)
+    *   `name` (VARCHAR)
+    *   `phone` (VARCHAR, Unique)
+    *   `rating` (VARCHAR)
+    *   `vehicle_details` (TEXT)
+    *   `notes` (TEXT)
+    *   `created_at`, `updated_at` (DATETIME)
+
+*   **`locations`**: Manages pickup and destination locations.
+    *   `id` (INT, PK, Auto-Increment)
+    *   `name` (VARCHAR)
+    *   `type` (ENUM('pickup', 'destination', 'both'))
+    *   `region` (VARCHAR)
+    *   `is_active` (BOOLEAN)
+    *   `created_at`, `updated_at` (DATETIME)
+    *   Unique constraint on (`name`, `type`).
+
+*   **`crops`**: Manages types of crops available for transport.
+    *   `id` (INT, PK, Auto-Increment)
+    *   `name` (VARCHAR, Unique)
+    *   `description` (TEXT)
+    *   `is_active` (BOOLEAN)
+    *   `created_at`, `updated_at` (DATETIME)
+
+*   **`system_settings`**: Stores system-wide configuration parameters.
+    *   `setting_key` (VARCHAR, PK)
+    *   `setting_value` (TEXT)
+    *   `description` (TEXT)
+    *   `updated_at` (DATETIME)
 
 ## Project Structure
 
@@ -124,51 +173,80 @@ The USSD service is accessible via a callback URL, typically `http://your_domain
 
 These endpoints are intended to be used by the `cargoweb/` admin dashboard frontend.
 
-*   ### Get All Orders
-    *   **Endpoint:** `GET /api/orders`
-    *   **Description:** Retrieves a list of all transport orders from the database, sorted by creation date in descending order.
-    *   **Response:** `200 OK` with a JSON array of order objects.
-        ```json
-        [
-            {
-                "track_number": "TRK2407210001",
-                "phone_number": "0754123456",
-                "crop": "Mahindi",
-                "quantity": 100,
-                "pickup_location": "Mbeya Mjini",
-                "destination_location": "Soweto",
-                "transporter_name": "Juma Mwalimu",
-                "transporter_phone": "0754...",
-                "transporter_rating": "4.8/5",
-                "status": "Ombi limepokelewa...",
-                "created_at": "2024-07-21T10:00:00",
-                "status_updated_at": "2024-07-21T10:00:00",
-                "transporter": { // Convenience object
-                    "name": "Juma Mwalimu",
-                    "phone": "0754...",
-                    "rating": "4.8/5"
-                }
-            },
-            // ... more orders
-        ]
-        ```
-
-*   ### Update Order Status
-    *   **Endpoint:** `PUT /api/orders/<string:track_number>/status`
+### Order Management
+*   #### Get All Orders (`GET /api/orders`)
+    *   **Description:** Retrieves a list of all transport orders, joined with crop, location, and transporter details. Sorted by creation date descending.
+    *   **Response:** `200 OK` with a JSON array of order objects. Each order object includes:
+        *   `track_number`, `phone_number`, `quantity`, `status`, `created_at`, `status_updated_at`
+        *   `crop_details`: { `id`, `name` } (or old `crop` name if `crop_id` is null)
+        *   `pickup_location_details`: { `id`, `name` } (or old `pickup_location` name)
+        *   `destination_location_details`: { `id`, `name` } (or old `destination_location` name)
+        *   `transporter_details`: { `id`, `name`, `phone`, `rating` } (or old transporter fields)
+*   #### Update Order Status (`PUT /api/orders/<string:track_number>/status`)
     *   **Description:** Updates the status of a specific order.
-    *   **URL Parameters:**
-        *   `track_number` (string): The tracking number of the order to update.
-    *   **Request Body (JSON):**
-        ```json
-        {
-            "status": "Mizigo iko njiani"
-        }
-        ```
-    *   **Response:**
-        *   `200 OK`: With the updated order object (JSON).
-        *   `400 Bad Request`: If `status` is missing in the request body or JSON is invalid.
-        *   `404 Not Found`: If the order with the given `track_number` doesn't exist.
-        *   `500 Internal Server Error`: For database or other server-side errors.
+    *   **Request Body (JSON):** `{ "status": "New Status String" }`
+    *   **Response:** `200 OK` with the updated order object (JSON, including joined details as above). `400`, `404`, `500` for errors.
+
+### Transporter Management (`/api/transporters`)
+*   #### Create Transporter (`POST /`)
+    *   **Request Body (JSON):** `{ "name": "...", "phone": "...", "rating": "...", "vehicle_details": "...", "notes": "..." }` (name and phone required)
+    *   **Response:** `201 Created` with `{ "message": "Transporter created successfully", "id": <new_id> }`. `400`, `409` (duplicate phone), `500` for errors.
+*   #### Get All Transporters (`GET /`)
+    *   **Response:** `200 OK` with a JSON array of transporter objects.
+*   #### Get Transporter by ID (`GET /<int:transporter_id>`)
+    *   **Response:** `200 OK` with the transporter object. `404` if not found.
+*   #### Update Transporter (`PUT /<int:transporter_id>`)
+    *   **Request Body (JSON):** `{ "name": "...", "phone": "...", ... }` (any fields to update)
+    *   **Response:** `200 OK` with `{ "message": "Transporter updated successfully" }`. `400`, `404`, `409` (duplicate phone), `500` for errors.
+*   #### Delete Transporter (`DELETE /<int:transporter_id>`)
+    *   **Response:** `200 OK` with `{ "message": "Transporter deleted successfully" }`. `404`, `409` (if referenced in orders and not handled by `ON DELETE SET NULL`), `500` for errors.
+
+### Location Management (`/api/locations`)
+*   #### Create Location (`POST /`)
+    *   **Request Body (JSON):** `{ "name": "...", "type": "pickup|destination|both", "region": "...", "is_active": true|false }` (name required, type defaults to 'both', is_active to true)
+    *   **Response:** `201 Created` with `{ "message": "Location created successfully", "id": <new_id> }`. `400`, `409` (duplicate name/type), `500` for errors.
+*   #### Get All Locations (`GET /`)
+    *   **Query Parameters (Optional):** `?type=pickup|destination|both` (Filters by type; 'pickup' includes 'pickup' and 'both', 'destination' includes 'destination' and 'both')
+    *   **Response:** `200 OK` with a JSON array of location objects.
+*   #### Get Location by ID (`GET /<int:location_id>`)
+    *   **Response:** `200 OK` with the location object. `404` if not found.
+*   #### Update Location (`PUT /<int:location_id>`)
+    *   **Request Body (JSON):** `{ "name": "...", "type": "...", ... }` (any fields to update)
+    *   **Response:** `200 OK` with `{ "message": "Location updated successfully" }`. `400`, `404`, `409` (duplicate name/type), `500` for errors.
+*   #### Delete Location (`DELETE /<int:location_id>`)
+    *   **Response:** `200 OK` with `{ "message": "Location deleted successfully" }`. `404`, `409` (if referenced in orders), `500` for errors.
+
+### Crop Management (`/api/crops`)
+*   #### Create Crop (`POST /`)
+    *   **Request Body (JSON):** `{ "name": "...", "description": "...", "is_active": true|false }` (name required, is_active defaults to true)
+    *   **Response:** `201 Created` with `{ "message": "Crop created successfully", "id": <new_id> }`. `400`, `409` (duplicate name), `500` for errors.
+*   #### Get All Crops (`GET /`)
+    *   **Query Parameters (Optional):** `?active=true|false`
+    *   **Response:** `200 OK` with a JSON array of crop objects.
+*   #### Get Crop by ID (`GET /<int:crop_id>`)
+    *   **Response:** `200 OK` with the crop object. `404` if not found.
+*   #### Update Crop (`PUT /<int:crop_id>`)
+    *   **Request Body (JSON):** `{ "name": "...", "description": "...", ... }` (any fields to update)
+    *   **Response:** `200 OK` with `{ "message": "Crop updated successfully" }`. `400`, `404`, `409` (duplicate name), `500` for errors.
+*   #### Delete Crop (`DELETE /<int:crop_id>`)
+    *   **Response:** `200 OK` with `{ "message": "Crop deleted successfully" }`. `404`, `409` (if referenced in orders), `500` for errors.
+
+### System Settings Management (`/api/system-settings`)
+*   #### Get All System Settings (`GET /`)
+    *   **Response:** `200 OK` with a JSON array of system setting objects (`{setting_key, setting_value, description, updated_at}`).
+*   #### Get System Setting by Key (`GET /<string:setting_key>`)
+    *   **Response:** `200 OK` with the system setting object. `404` if not found.
+*   #### Create/Update System Setting (`PUT /<string:setting_key>`)
+    *   **Request Body (JSON):** `{ "setting_value": "...", "description": "..." }` (setting_value required)
+    *   **Response:** `200 OK` or `201 Created` with a success message. `400`, `500` for errors.
+
+### Reporting Endpoints
+*   #### Get Orders Summary (`GET /api/reports/orders-summary`)
+    *   **Description:** Returns a summary of orders, including total orders and counts by status.
+    *   **Response:** `200 OK` with JSON: `{ "total_orders": <count>, "orders_by_status": [ { "status": "...", "count": <num> }, ... ] }`
+*   #### Get Orders Over Time (`GET /api/reports/orders-over-time`)
+    *   **Description:** Returns order counts grouped by creation date.
+    *   **Response:** `200 OK` with JSON array: `[ { "order_date": "YYYY-MM-DD", "count": <num> }, ... ]`
 
 ## Deployment (Example for cPanel)
 
